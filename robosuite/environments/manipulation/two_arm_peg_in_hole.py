@@ -172,6 +172,11 @@ class TwoArmPegInHole(TwoArmEnv):
         use_object_obs=True,
         reward_scale=1.0,
         reward_shaping=False,
+        # Dense reward component weights (only used when reward_shaping=True)
+        reaching_weight=1.0,
+        perpendicular_weight=1.0,
+        parallel_weight=1.0,
+        alignment_weight=1.0,
         peg_radius=(0.015, 0.03),
         peg_length=0.13,
         has_renderer=False,
@@ -200,6 +205,12 @@ class TwoArmPegInHole(TwoArmEnv):
         # reward configuration
         self.reward_scale = reward_scale
         self.reward_shaping = reward_shaping
+        
+        # Dense reward component weights
+        self.reaching_weight = reaching_weight
+        self.perpendicular_weight = perpendicular_weight
+        self.parallel_weight = parallel_weight
+        self.alignment_weight = alignment_weight
 
         # whether to use ground-truth object states
         self.use_object_obs = use_object_obs
@@ -259,26 +270,63 @@ class TwoArmPegInHole(TwoArmEnv):
 
         """
         reward = 0
+        
+        # Initialize reward info dict for logging
+        self._reward_info = {
+            "reward/total": 0.0,
+            "reward/success": 0.0,
+            "reward/reaching": 0.0,
+            "reward/perpendicular": 0.0,
+            "reward/parallel": 0.0,
+            "reward/alignment": 0.0,
+            "reward/peg_hole_dist": 0.0,
+            "reward/perpendicular_dist": 0.0,
+            "reward/parallel_dist": 0.0,
+            "reward/alignment_cos": 0.0,
+        }
 
         # Right location and angle
-        if self._check_success():
+        success = self._check_success()
+        if success:
             reward = 1.0
+            self._reward_info["reward/success"] = 1.0
 
         # use a shaping reward
         if self.reward_shaping:
             # Grab relevant values
             t, d, cos = self._compute_orientation()
-            # reaching reward
+            
+            # Reaching reward: encourages peg and hole to get closer
+            # WARNING: This alone can cause robots to just collide without proper alignment
             hole_pos = self.sim.data.body_xpos[self.hole_body_id]
             gripper_site_pos = self.sim.data.body_xpos[self.peg_body_id]
             dist = np.linalg.norm(gripper_site_pos - hole_pos)
-            reaching_reward = 1 - np.tanh(1.0 * dist)
+            reaching_reward = (1 - np.tanh(1.0 * dist)) * self.reaching_weight
             reward += reaching_reward
 
-            # Orientation reward
-            reward += 1 - np.tanh(d)
-            reward += 1 - np.tanh(np.abs(t))
-            reward += cos
+            # Perpendicular distance reward: encourages alignment perpendicular to insertion axis
+            perpendicular_reward = (1 - np.tanh(d)) * self.perpendicular_weight
+            reward += perpendicular_reward
+            
+            # Parallel distance reward: encourages correct depth positioning
+            parallel_reward = (1 - np.tanh(np.abs(t))) * self.parallel_weight
+            reward += parallel_reward
+            
+            # Alignment reward: encourages correct angular alignment (cos=1 when perfectly aligned)
+            alignment_reward = cos * self.alignment_weight
+            reward += alignment_reward
+            
+            # Store reward components for logging
+            self._reward_info["reward/reaching"] = reaching_reward
+            self._reward_info["reward/perpendicular"] = perpendicular_reward
+            self._reward_info["reward/parallel"] = parallel_reward
+            self._reward_info["reward/alignment"] = alignment_reward
+            
+            # Store raw metrics (without weights) for analysis
+            self._reward_info["reward/peg_hole_dist"] = dist
+            self._reward_info["reward/perpendicular_dist"] = d
+            self._reward_info["reward/parallel_dist"] = t
+            self._reward_info["reward/alignment_cos"] = cos
 
         # if we're not reward shaping, scale sparse reward so that the max reward is identical to its dense version
         else:
@@ -287,7 +335,20 @@ class TwoArmPegInHole(TwoArmEnv):
         if self.reward_scale is not None:
             reward *= self.reward_scale / 5.0
 
+        self._reward_info["reward/total"] = reward
         return reward
+    
+    def step(self, action):
+        """
+        Override step to include reward breakdown in info dict.
+        """
+        obs, reward, done, info = super().step(action)
+        
+        # Add reward breakdown to info
+        if hasattr(self, '_reward_info'):
+            info.update(self._reward_info)
+        
+        return obs, reward, done, info
 
     def _load_model(self):
         """
@@ -345,12 +406,21 @@ class TwoArmPegInHole(TwoArmEnv):
             tex_attrib=tex_attrib,
             mat_attrib=mat_attrib,
         )
+    #     red_mat = CustomMaterial(
+    # texture=[1.0, 0.0, 0.0, 1.0],
+    # tex_name="red_tex",
+    # mat_name="red_mat",
+    # tex_attrib={"type": "cube"},
+    # mat_attrib={"specular": "0.4", "shininess": "0.1"},
+# )
         self.peg = CylinderObject(
             name="peg",
             size_min=(self.peg_radius[0], self.peg_length),
             size_max=(self.peg_radius[1], self.peg_length),
             material=greenwood,
             rgba=[0, 1, 0, 1],
+            # material=red_mat,
+            # rgba=None,
             joints=None,
             rng=self.rng,
         )
