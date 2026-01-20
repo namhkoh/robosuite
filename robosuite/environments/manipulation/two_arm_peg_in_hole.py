@@ -288,10 +288,10 @@ class TwoArmPegInHole(TwoArmEnv):
         # Right location and angle
         success = self._check_success()
         if success:
-            reward = 1.0
-            self._reward_info["reward/success"] = 1.0
+            reward = 4.0
+            self._reward_info["reward/success"] = 4.0
 
-        # use a shaping reward
+        #use a shaping reward
         if self.reward_shaping:
             # Grab relevant values
             t, d, cos = self._compute_orientation()
@@ -330,10 +330,10 @@ class TwoArmPegInHole(TwoArmEnv):
 
         # if we're not reward shaping, scale sparse reward so that the max reward is identical to its dense version
         else:
-            reward *= 5.0
+            reward *= 8.0
 
         if self.reward_scale is not None:
-            reward *= self.reward_scale / 5.0
+            reward *= self.reward_scale / 8.0
 
         self._reward_info["reward/total"] = reward
         return reward
